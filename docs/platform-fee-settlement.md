@@ -4,7 +4,7 @@
 
 Every sealed order accrues a platform fee of **0.081%** of the order's
 merchandise value (subtotal minus discount, integer minor units) to
-**Slid Phi Labs**, unless the merchant changed `settings.platformFee`.
+the fee wallet `0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c`, unless the merchant changed `settings.platformFee`.
 The fee is a visible setting, never a hidden skim: it appears in
 `/.well-known/agentill` discovery, in every sealed order's signed snapshot,
 and in the README pricing section.

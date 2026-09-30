@@ -114,11 +114,11 @@ describe('parseRate', () => {
 });
 
 describe('resolvePlatformFee', () => {
-    it('absent settings -> lab default 0.081%', () => {
+    it('absent settings -> default 0.081% to fee wallet', () => {
         const r = resolvePlatformFee({});
         assert.equal(r.ok, true);
         assert.equal(r.fee.rate, DEFAULT_PLATFORM_FEE.rate);
-        assert.equal(r.fee.recipient, 'Slid Phi Labs');
+        assert.equal(r.fee.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
     });
     it('merchant can change rate and recipient', () => {
         const r = resolvePlatformFee({ platformFee: { rate: '0.01', recipient: 'Acme' } });
@@ -130,7 +130,7 @@ describe('resolvePlatformFee', () => {
         const r = resolvePlatformFee({ platformFee: { rate: '0.02' } });
         assert.equal(r.ok, true);
         assert.equal(r.fee.rate, '0.02');
-        assert.equal(r.fee.recipient, 'Slid Phi Labs');
+        assert.equal(r.fee.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
     });
     it('bad rate fails resolution', () => {
         assert.equal(resolvePlatformFee({ platformFee: { rate: 'nope' } }).ok, false);
@@ -299,7 +299,7 @@ describe('platform fee end-to-end (seal_order)', () => {
         const line = done.body.platformFee;
         assert.ok(line, 'platformFee line present');
         assert.equal(line.rate, '0.00081');
-        assert.equal(line.recipient, 'Slid Phi Labs');
+        assert.equal(line.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
         assert.equal(line.merchandiseMinor, 900);
         assert.equal(line.microcents, 7290);
         assert.equal(line.display, '$0.00729');
@@ -361,7 +361,7 @@ describe('platform fee end-to-end (seal_order)', () => {
         const box = createBox({ settings: settings(), adapter: adapter(), secrets: { serverSecret: SECRET } });
         const d = box.discovery();
         assert.equal(d.platformFee.rate, '0.00081');
-        assert.equal(d.platformFee.recipient, 'Slid Phi Labs');
+        assert.equal(d.platformFee.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
     });
 
     it('file ledger backend accrues durably through the box', async () => {

@@ -5,7 +5,7 @@
  *
  * The platform fee is a VISIBLE merchant setting (settings.platformFee),
  * never a hidden skim. Default: 0.081% of each sealed order's merchandise
- * value, accruing to Slid Phi Labs. Merchants can see the setting, change
+ * value, accruing to 0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c. Merchants can see the setting, change
  * the rate (0 disables the fee), and change the recipient label. The core
  * paths carry no hard-coded lab lock-in: the default lives in one exported
  * constant and everything else flows from settings.
@@ -25,7 +25,7 @@
 /** The default fee every merchant sees unless they change settings.platformFee. */
 export const DEFAULT_PLATFORM_FEE = Object.freeze({
     rate: '0.00081', // 0.081%
-    recipient: 'Slid Phi Labs',
+    recipient: '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c',
 });
 
 /** Microcents per minor unit (cent): 1 cent = 10,000 microcents. */
