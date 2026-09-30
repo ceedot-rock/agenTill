@@ -110,11 +110,11 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
         return identityAdapter;
     };
     const toolTrust = toolTrustFor(settings);
-    // Platform fee: a VISIBLE merchant setting (settings.platformFee), never a
-    // hidden skim. Absent -> default 0.081% accruing to Slid Phi Labs; merchants
-    // may change the rate (0 disables) and the recipient label. A malformed
-    // rate is a pre-flight REFUSAL (validate stage), not a construction throw,
-    // so fall back to the default here and let preflight speak precisely.
+    // Platform fee: LOCKED at 0.081% accruing to the lab's fee wallet — visible
+    // in discovery and every sealed order, never a hidden skim, but NOT a
+    // merchant setting. resolvePlatformFee ignores settings.platformFee for
+    // rate/recipient; only settings.platformFee.ledgerFile (durable ledger
+    // path) is honored, since that's operational storage, not the fee.
     const feeResolved = resolvePlatformFee(settings);
     const platformFeeCfg = (feeResolved.ok ? feeResolved : resolvePlatformFee({})).fee;
     // Fee ledger: durable JSON file when the merchant configures

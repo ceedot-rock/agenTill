@@ -120,20 +120,21 @@ describe('resolvePlatformFee', () => {
         assert.equal(r.fee.rate, DEFAULT_PLATFORM_FEE.rate);
         assert.equal(r.fee.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
     });
-    it('merchant can change rate and recipient', () => {
+    it('merchant override of rate/recipient is ignored (locked fee)', () => {
         const r = resolvePlatformFee({ platformFee: { rate: '0.01', recipient: 'Acme' } });
         assert.equal(r.ok, true);
-        assert.equal(r.fee.rate, '0.01');
-        assert.equal(r.fee.recipient, 'Acme');
-    });
-    it('partial override keeps the other default', () => {
-        const r = resolvePlatformFee({ platformFee: { rate: '0.02' } });
-        assert.equal(r.ok, true);
-        assert.equal(r.fee.rate, '0.02');
+        assert.equal(r.fee.rate, '0.00081');
         assert.equal(r.fee.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
     });
-    it('bad rate fails resolution', () => {
-        assert.equal(resolvePlatformFee({ platformFee: { rate: 'nope' } }).ok, false);
+    it('zero rate does not disable the fee', () => {
+        const r = resolvePlatformFee({ platformFee: { rate: '0' } });
+        assert.equal(r.ok, true);
+        assert.equal(r.fee.rate, '0.00081');
+    });
+    it('garbage settings are ignored, fee still resolves', () => {
+        const r = resolvePlatformFee({ platformFee: { rate: 'nope', recipient: '' } });
+        assert.equal(r.ok, true);
+        assert.equal(r.fee.rate, '0.00081');
     });
 });
 
@@ -321,7 +322,7 @@ describe('platform fee end-to-end (seal_order)', () => {
         assert.equal(box.feeLedger.balanceMicrocents('fee-store'), 14580);
     });
 
-    it('merchant rate 0 disables the fee (line still visible, zero)', async () => {
+    it('merchant rate 0 is ignored (fee locked on)', async () => {
         const box = createBox({
             settings: settings({ platformFee: { rate: 0 } }),
             adapter: adapter(),
@@ -329,11 +330,11 @@ describe('platform fee end-to-end (seal_order)', () => {
         });
         assert.equal((await box.preflight()).ok, true);
         const done = await sealOnce(box, 'buyer-a');
-        assert.equal(done.body.platformFee.microcents, 0);
-        assert.equal(box.feeLedger.balanceMicrocents('fee-store'), 0);
+        assert.equal(done.body.platformFee.microcents, 7290); // 0.081% of $9.00
+        assert.equal(box.feeLedger.balanceMicrocents('fee-store'), 7290);
     });
 
-    it('merchant custom rate and recipient are honored', async () => {
+    it('merchant custom rate and recipient are ignored (locked)', async () => {
         const box = createBox({
             settings: settings({ platformFee: { rate: '0.01', recipient: 'Acme' } }),
             adapter: adapter(),
@@ -341,20 +342,20 @@ describe('platform fee end-to-end (seal_order)', () => {
         });
         assert.equal((await box.preflight()).ok, true);
         const done = await sealOnce(box, 'buyer-a');
-        assert.equal(done.body.platformFee.microcents, 90000); // 1% of $9.00 = $0.09
-        assert.equal(done.body.platformFee.recipient, 'Acme');
+        assert.equal(done.body.platformFee.microcents, 7290); // still 0.081%
+        assert.equal(done.body.platformFee.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
     });
 
-    it('pre-flight REFUSES a malformed fee rate (validate stage)', async () => {
+    it('malformed fee rate in settings is ignored (no pre-flight refusal)', async () => {
         const box = createBox({
             settings: settings({ platformFee: { rate: 'not-a-rate' } }),
             adapter: adapter(),
             secrets: { serverSecret: SECRET },
         });
         const pf = await box.preflight();
-        assert.equal(pf.ok, false);
-        assert.equal(pf.stage, 'validate');
-        assert.ok(pf.errors.some((e) => e.code === 'bad_rate'));
+        assert.equal(pf.ok, true);
+        const done = await sealOnce(box, 'buyer-a');
+        assert.equal(done.body.platformFee.microcents, 7290);
     });
 
     it('discovery advertises the fee', async () => {

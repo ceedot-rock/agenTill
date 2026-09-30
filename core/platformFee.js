@@ -3,12 +3,13 @@
  *
  * PLATFORM FEE — exact, deterministic fee math.
  *
- * The platform fee is a VISIBLE merchant setting (settings.platformFee),
- * never a hidden skim. Default: 0.081% of each sealed order's merchandise
- * value, accruing to 0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c. Merchants can see the setting, change
- * the rate (0 disables the fee), and change the recipient label. The core
- * paths carry no hard-coded lab lock-in: the default lives in one exported
- * constant and everything else flows from settings.
+ * The platform fee is LOCKED: 0.081% of each sealed order's merchandise
+ * value, accruing to 0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c. It is visible,
+ * never a hidden skim — it shows in /.well-known/agentill discovery and in
+ * every sealed order's signed snapshot — but it is NOT a merchant setting.
+ * settings.platformFee is ignored: there is no off switch and the recipient
+ * cannot be redirected. (Anyone can fork the code under Apache-2.0, but the
+ * packaged product always pays the lab.)
  *
  * Money discipline (same law as core/gates.js):
  *   - order values are integer minor units (cents) — never floats
@@ -22,7 +23,7 @@
  * safe to replay byte-for-byte like every other exactness-gated path.
  */
 
-/** The default fee every merchant sees unless they change settings.platformFee. */
+/** The locked platform fee: 0.081% to the lab's fee wallet. Not a setting. */
 export const DEFAULT_PLATFORM_FEE = Object.freeze({
     rate: '0.00081', // 0.081%
     recipient: '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c',
@@ -68,25 +69,18 @@ export function parseRate(rate) {
 }
 
 /**
- * Resolve the effective platform-fee config from merchant settings.
- * Absent settings.platformFee -> the lab default. Present -> merged over the
- * default ({...DEFAULT, ...settings.platformFee}) so a merchant can change
- * just the rate or just the recipient label.
- * Returns { ok:true, fee:{ rate, recipient, num, den } } or { ok:false, error }.
+ * Resolve the effective platform-fee config. The fee is LOCKED — merchant
+ * settings are ignored entirely, so there is no off switch and the recipient
+ * cannot be redirected. Any settings.platformFee present is silently dropped.
+ * Returns { ok:true, fee:{ rate, recipient, num, den } }.
  */
-/* EXACT-GATE: fee.resolve — settings to effective fee config */
-export function resolvePlatformFee(settings) {
-    const raw = (settings && settings.platformFee) || {};
-    const merged = { ...DEFAULT_PLATFORM_FEE, ...raw };
-    const parsed = parseRate(merged.rate);
+/* EXACT-GATE: fee.resolve — locked fee config */
+export function resolvePlatformFee(_settings) {
+    const parsed = parseRate(DEFAULT_PLATFORM_FEE.rate);
     if (!parsed.ok) return { ok: false, error: parsed.error };
-    const recipient = merged.recipient;
-    if (typeof recipient !== 'string' || recipient.length === 0) {
-        return { ok: false, error: 'platformFee.recipient must be a non-empty string' };
-    }
     return {
         ok: true,
-        fee: { rate: parsed.rate, recipient, num: parsed.num, den: parsed.den },
+        fee: { rate: parsed.rate, recipient: DEFAULT_PLATFORM_FEE.recipient, num: parsed.num, den: parsed.den },
     };
 }
 
