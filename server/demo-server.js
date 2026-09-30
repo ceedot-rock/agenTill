@@ -20,7 +20,7 @@ import { KNOWN_SCOPES } from '../core/gates.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
-const PORT = 8471;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 8471;
 
 /* ---------------- merchant's EXISTING checkout flow ---------------- */
 
@@ -85,6 +85,8 @@ const settings = {
     checkoutBinding: { applyPatch: 'adapter' },
     taxRateBps: 875,
     // demo: no per-call tolls (tolls are opt-in via settings.tolls)
+    // platform fee: default 0.081% to Slid Phi Labs, durable JSON ledger
+    platformFee: { ledgerFile: join(ROOT, 'ledger', 'data', 'platform-fees.json') },
 };
 
 /* ---------------- boot ---------------- */

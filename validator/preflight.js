@@ -25,6 +25,7 @@ import { createHmac } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { canon, KNOWN_SCOPES, TOOL_NAMES } from '../core/gates.js';
+import { parseRate } from '../core/platformFee.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(join(HERE, 'schema.json'), 'utf8'));
@@ -100,6 +101,23 @@ export function validateSettings(settings) {
             errors.push(err('bad_enum', 'identity.adapter must be open|es256-jwt', 'identity.adapter'));
         } else if (id.adapter === 'es256-jwt' && !id.publicJwk) {
             errors.push(err('missing', 'identity.publicJwk is required for the es256-jwt adapter', 'identity.publicJwk'));
+        }
+    }
+    if (settings.platformFee !== undefined) {
+        const pf = settings.platformFee;
+        if (!pf || typeof pf !== 'object' || Array.isArray(pf)) {
+            errors.push(err('bad_type', 'platformFee must be an object', 'platformFee'));
+        } else {
+            const pr = pf.rate === undefined ? { ok: true } : parseRate(pf.rate);
+            if (!pr.ok) {
+                errors.push(err('bad_rate', `platformFee.rate invalid: ${pr.error}`, 'platformFee.rate'));
+            }
+            if (pf.recipient !== undefined && (typeof pf.recipient !== 'string' || pf.recipient.length === 0)) {
+                errors.push(err('bad_recipient', 'platformFee.recipient must be a non-empty string', 'platformFee.recipient'));
+            }
+            if (pf.ledgerFile !== undefined && (typeof pf.ledgerFile !== 'string' || pf.ledgerFile.length === 0)) {
+                errors.push(err('bad_ledger', 'platformFee.ledgerFile must be a non-empty path string', 'platformFee.ledgerFile'));
+            }
         }
     }
     if (settings.toolTrust !== undefined) {

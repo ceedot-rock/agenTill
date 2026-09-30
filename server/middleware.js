@@ -43,6 +43,13 @@ import { verifyGrant } from '../core/grants.js';
 import { applyQuota, issueReceipt, DEFAULT_TOLL_TABLE } from '../core/tolls.js';
 import { activate as preflightActivate, verifyActivation } from '../validator/preflight.js';
 import { identityAdapterFor, toolTrustFor, meetsTrust } from '../core/identity.js';
+import {
+    DEFAULT_PLATFORM_FEE,
+    resolvePlatformFee,
+    computePlatformFeeMicrocents,
+    feeLineForSnapshot,
+} from '../core/platformFee.js';
+import { createPlatformFeeLedger, createMemoryPlatformFeeLedger } from '../ledger/platformFees.js';
 import { createHmac } from 'node:crypto';
 
 /** Scopes each tool needs (checked against JWT scopes + merchant allow-list). */
@@ -103,6 +110,20 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
         return identityAdapter;
     };
     const toolTrust = toolTrustFor(settings);
+    // Platform fee: a VISIBLE merchant setting (settings.platformFee), never a
+    // hidden skim. Absent -> default 0.081% accruing to Slid Phi Labs; merchants
+    // may change the rate (0 disables) and the recipient label. A malformed
+    // rate is a pre-flight REFUSAL (validate stage), not a construction throw,
+    // so fall back to the default here and let preflight speak precisely.
+    const feeResolved = resolvePlatformFee(settings);
+    const platformFeeCfg = (feeResolved.ok ? feeResolved : resolvePlatformFee({})).fee;
+    // Fee ledger: durable JSON file when the merchant configures
+    // settings.platformFee.ledgerFile, in-memory otherwise. Tests and the
+    // default path stay side-effect free; production sets the file.
+    const feeLedger = hooks.platformFeeLedger
+        || (settings.platformFee && settings.platformFee.ledgerFile
+            ? createPlatformFeeLedger({ filePath: settings.platformFee.ledgerFile })
+            : createMemoryPlatformFeeLedger());
     const usage = new Map(); // "<agent>:<tool>:<period>" -> count (merchant persists in prod)
     const seqCounters = new Map(); // merchantId -> seq
     let activation = null;
@@ -111,6 +132,9 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
         settings,
         adapter,
         secrets,
+        /** Effective platform-fee config + the ledger it accrues into. */
+        platformFee: { rate: platformFeeCfg.rate, recipient: platformFeeCfg.recipient },
+        feeLedger,
 
         discovery() {
             const adapterId = ((settings.identity || {}).adapter) || 'open';
@@ -122,7 +146,7 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
             }
             return {
                 name: 'agentill',
-                version: '0.2.0',
+                version: '0.3.0',
                 tools: {
                     sharedState: true,
                     note: 'tools run against the merchant checkout state object; agent and buyer share one checkout',
@@ -137,6 +161,11 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
                 identity: { adapter: adapterId, description: adapterDesc, toolTrust },
                 payments: { x402Version: 1, rails: (settings.paymentRails || []).map((r) => r.rail) },
                 tolls: tollTable ? { table: tollTable, currency: 'USD' } : { enabled: false },
+                platformFee: {
+                    rate: platformFeeCfg.rate,
+                    recipient: platformFeeCfg.recipient,
+                    note: 'per sealed order, on merchandise value (subtotal minus discount); accrues in the fee ledger; fractional cents are never charged; settled monthly in whole cents',
+                },
                 confirmation: settings.confirmationPolicy,
                 preflight: { required: true, endpoint: 'POST /agentill/preflight' },
             };
@@ -318,7 +347,35 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
             const seqKey = settings.merchantId;
             const seq = (seqCounters.get(seqKey) || 0) + 1;
             seqCounters.set(seqKey, seq);
-            const signed = signSnapshot({ state: newState, agentId: ident.agentId, tool, seq, serverSecret: secrets.serverSecret, nowSec });
+
+            // 9b. platform fee on sealed orders: exact BigInt math, integer
+            // microcents; fractional cents accrue in the ledger and are NEVER
+            // charged. The fee line rides inside the signed snapshot state.
+            let platformFeeLine = null;
+            if (tool === 'seal_order' && totals.ok) {
+                const merchandiseMinor = Math.max(0, totals.totals.subtotalMinor - totals.totals.discountMinor);
+                const feeRes = computePlatformFeeMicrocents(merchandiseMinor, platformFeeCfg);
+                const microcents = feeRes.ok ? feeRes.microcents : 0;
+                if (microcents > 0) {
+                    feeLedger.accrue({
+                        merchantId: settings.merchantId,
+                        orderId: newState.orderId || null,
+                        seq,
+                        microcents,
+                        rate: platformFeeCfg.rate,
+                        recipient: platformFeeCfg.recipient,
+                        at: nowSec,
+                    });
+                }
+                platformFeeLine = feeLineForSnapshot({
+                    merchandiseMinor,
+                    microcents,
+                    rate: platformFeeCfg.rate,
+                    recipient: platformFeeCfg.recipient,
+                });
+            }
+            const snapshotState = platformFeeLine ? { ...newState, platformFee: platformFeeLine } : newState;
+            const signed = signSnapshot({ state: snapshotState, agentId: ident.agentId, tool, seq, serverSecret: secrets.serverSecret, nowSec });
             usage.set(`${ident.agentId}:${tool}:${period}`, (usage.get(`${ident.agentId}:${tool}:${period}`) || 0) + 1);
             if (quote.charged) {
                 receipt = issueReceipt({ agentId: ident.agentId, tool, amountMinor: quote.amountMinor, seq, periodId: period, nowSec });
@@ -326,7 +383,7 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
             if (hooks.onSnapshot) hooks.onSnapshot(signed);
             if (hooks.onReceipt && receipt) hooks.onReceipt(receipt);
 
-            return { status: 200, body: { ok: true, result: summarizeResult(tool, newState), snapshot: signed, receipt, toll: { charged: quote.charged, amountMinor: quote.amountMinor } } };
+            return { status: 200, body: { ok: true, result: summarizeResult(tool, newState), snapshot: signed, receipt, toll: { charged: quote.charged, amountMinor: quote.amountMinor }, platformFee: platformFeeLine } };
         },
 
         /** Framework-agnostic request handler. */

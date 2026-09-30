@@ -1,0 +1,18 @@
+# agenTill demo — flyctl deploy config (kept for reference; live deploy was done via the Machines API)
+app = "agentill-demo"
+primary_region = "ewr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

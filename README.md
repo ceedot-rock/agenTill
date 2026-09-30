@@ -89,6 +89,15 @@ Raise per-tool trust levels with `settings.toolTrust` (e.g. `{ seal_order: 'veri
 
 Off by default. Set `settings.tolls` to meter agent tool calls (e.g. 2¢ per catalog browse after a free quota). Charged calls return `402` with payment requirements on the `x402` rail; the agent pays, then retries. Receipts are deterministic.
 
+## Pricing
+
+**agenTill is free to use** (Apache-2.0). One visible platform fee applies:
+
+- **0.081%** of each sealed order's merchandise value (subtotal minus discount), accruing to **Slid Phi Labs**.
+- Set it in the open: `settings.platformFee = { rate: 0.00081, recipient: 'Slid Phi Labs' }`. Merchants can change the rate (including `0` to disable) and the recipient label — it's a setting, not a skim. It shows up in `/.well-known/agentill` discovery and inside every sealed order's signed snapshot.
+- **Fractional cents are never charged.** Fees accrue exactly (integer microcents, no float math) in a per-merchant ledger and settle **monthly in whole cents** via a Stripe invoice from the lab. A $9.00 order accrues $0.00729 — it sits in the ledger until whole cents exist.
+- Details: [docs/platform-fee-settlement.md](docs/platform-fee-settlement.md).
+
 ## Try it
 
 ```

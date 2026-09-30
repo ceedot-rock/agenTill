@@ -193,6 +193,23 @@
     "toolTrust": {
       "description": "Minimum trust per tool (open|verified|elevated). Defaults all to open; buyer confirmation guards money.",
       "type": "object"
+    },
+    "platformFee": {
+      "description": "Visible platform fee on sealed orders. Absent = default 0.081% accruing to Slid Phi Labs. Merchants may change rate (decimal 0..1 as number or string; 0 disables) and recipient label. Fractional cents accrue in the ledger and are never charged; settlement releases whole cents only.",
+      "properties": {
+        "rate": {
+          "description": "Decimal rate between 0 and 1, e.g. 0.00081 for 0.081%. Applied to merchandise value (subtotal minus discount)."
+        },
+        "recipient": {
+          "description": "Label for who the fee accrues to.",
+          "type": "string"
+        },
+        "ledgerFile": {
+          "description": "Optional path for the durable JSON fee ledger. Absent = in-memory ledger (tests/dev); production deployments should set this.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     }
   },
   "required": [
