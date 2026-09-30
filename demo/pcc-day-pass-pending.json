@@ -1,0 +1,14 @@
+{
+  "mode": "DRY-RUN",
+  "product": "PCC Day Pass",
+  "productId": "pcc-day-pass",
+  "amountMinor": 900,
+  "amountDisplay": "$9.00 USD",
+  "buyerEmail": "corey@slidphilabs.com",
+  "paymentMethodRef": "stripe_card_on_file",
+  "paymentSource": "Buyer's card, via Slid Phi Labs' Stripe (livemode)",
+  "destination": "Slid Phi Labs Stripe account",
+  "stripePriceNeeded": "PCC Day Pass — $9.00 one-time (does not exist yet; see below)",
+  "orderId": "pcc_muo6swur",
+  "at": "2026-09-30T14:14:55.059Z"
+}

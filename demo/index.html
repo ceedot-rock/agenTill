@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Store — agenTill</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f4f4f5; color: #18181b; }
+  header { background: #18181b; color: #fff; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; }
+  header .badge { background: #16a34a; border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+  header .badge.refused { background: #dc2626; }
+  main { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; padding: 16px 24px; max-width: 1400px; margin: 0 auto; }
+  section { background: #fff; border-radius: 12px; padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  h2 { margin: 0 0 4px; font-size: 17px; }
+  .sub { color: #71717a; font-size: 13px; margin: 0 0 12px; }
+  .product { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee; }
+  button { cursor: pointer; border-radius: 8px; border: 1px solid #d4d4d8; background: #fff; padding: 8px 12px; font-size: 14px; }
+  button.primary { background: #18181b; color: #fff; border: none; width: 100%; padding: 12px; font-size: 15px; margin-top: 12px; }
+  button.agent { background: #1d4ed8; color: #fff; border: none; margin: 4px 4px 4px 0; }
+  button:disabled { opacity: .45; cursor: default; }
+  label { display: block; font-size: 13px; margin: 8px 0 2px; color: #52525b; }
+  input, select { width: 100%; padding: 8px; border: 1px solid #d4d4d8; border-radius: 8px; font-size: 14px; }
+  #log { background: #0c0c0e; color: #a1f0b1; font-family: ui-monospace, monospace; font-size: 12px; border-radius: 8px; padding: 10px; height: 260px; overflow-y: auto; white-space: pre-wrap; }
+  #log .warn { color: #fbbf24; }
+  #log .err { color: #f87171; }
+  .totals { font-size: 14px; margin-top: 10px; }
+  .totals b { font-size: 18px; }
+  .note { font-size: 12px; color: #71717a; margin-top: 10px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div><strong>Demo Store</strong> <span style="opacity:.7">— the merchant's existing checkout</span></div>
+  <div class="badge" id="preflightBadge">box: checking pre-flight…</div>
+</header>
+<main>
+  <section>
+    <h2>Store</h2>
+    <p class="sub">Human flow. No box involved.</p>
+    <div id="products"></div>
+    <h2 style="margin-top:16px">Cart</h2>
+    <div id="cart"></div>
+  </section>
+  <section>
+    <h2>Checkout — existing flow</h2>
+    <p class="sub">This form and the Place order button are the merchant's own flow. The box never replaces them.</p>
+    <label>Name <input id="f_name" value="Ada Buyer"></label>
+    <label>Address <input id="f_addr" value="1 Market St, San Francisco, CA"></label>
+    <label>Shipping
+      <select id="f_ship">
+        <option value="">— choose —</option>
+        <option value="standard">Standard (5–7 days)</option>
+        <option value="express">Express (2 days)</option>
+      </select>
+    </label>
+    <label>Payment
+      <select id="f_pay">
+        <option value="">— choose —</option>
+        <option value="card_4242">Card •••• 4242</option>
+        <option value="x402_base">x402 / Base USDC</option>
+      </select>
+    </label>
+    <div class="totals" id="totals"></div>
+    <button class="primary" id="placeOrder">Place order (existing flow)</button>
+    <p class="note" id="orderMsg"></p>
+  </section>
+  <section>
+    <h2>Agent console — the box</h2>
+    <p class="sub">Same checkout object, driven by an agent through the box's four tools. Submission always asks you first.</p>
+    <div>
+      <button class="agent" id="a_search">Agent: search products</button>
+      <button class="agent" id="a_get">Agent: get checkout</button>
+      <button class="agent" id="a_ship">Agent: set express shipping</button>
+      <button class="agent" id="a_complete">Agent: complete checkout</button>
+    </div>
+    <h2 style="margin-top:14px">Box log</h2>
+    <div id="log"></div>
+    <p class="note">Snapshots are HMAC-signed and bind each agent action to the shared checkout state. Toll receipts are deterministic.</p>
+  </section>
+</main>
+<script src="/sdk/agentill.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+function log(msg, cls) {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = (cls === 'err' ? '✗ ' : cls === 'warn' ? '! ' : '· ') + msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+const money = (c) => '$' + (c / 100).toFixed(2);
+
+async function refresh() {
+  const r = await fetch('/demo/state').then((x) => x.json());
+  const s = r.state;
+  $('cart').innerHTML = s.items.map((i) => `<div class="product"><span>${i.title} × ${i.qty}</span><span>${money(i.qty * i.priceMinor)}</span></div>`).join('') || '<p class="sub">empty</p>';
+  const t = s.totals;
+  $('totals').innerHTML = t
+    ? `Subtotal ${money(t.subtotalMinor)} · Tax ${money(t.taxMinor)} · Ship ${money(t.shippingMinor)}<br><b>Total ${money(t.totalMinor)}</b>`
+    : '<span class="sub">totals computed at review</span>';
+  if (s.address && !$('f_addr').dataset.touched) $('f_addr').value = s.address;
+}
+
+async function buyerUpdate(patch) {
+  const r = await fetch('/demo/buyer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'update', patch }) }).then((x) => x.json());
+  if (!r.ok) log('buyer update failed: ' + r.error, 'err');
+  await refresh();
+}
+
+document.querySelectorAll('#products').forEach(() => {});
+async function loadProducts() {
+  // products come from the demo catalog via the agent-searchable surface
+  const items = [{ id: 'p1', title: 'Canvas Backpack', priceMinor: 8900 }, { id: 'p2', title: 'Trail Running Shoes', priceMinor: 12900 }, { id: 'p3', title: 'Wool Beanie', priceMinor: 2400 }];
+  $('products').innerHTML = '';
+  const cur = await fetch('/demo/state').then((x) => x.json()).then((r) => r.state);
+  items.forEach((p) => {
+    const div = document.createElement('div');
+    div.className = 'product';
+    div.innerHTML = `<span>${p.title}</span><span>${money(p.priceMinor)} <button data-id="${p.id}">Add</button></span>`;
+    div.querySelector('button').addEventListener('click', async () => {
+      const items = [...cur.items];
+      const found = items.find((i) => i.id === p.id);
+      if (found) found.qty += 1; else items.push({ id: p.id, title: p.title, qty: 1, priceMinor: p.priceMinor });
+      await buyerUpdate({ items });
+    });
+    $('products').appendChild(div);
+  });
+}
+
+['f_addr'].forEach((id) => $(id).addEventListener('input', () => { $(id).dataset.touched = '1'; }));
+$('placeOrder').addEventListener('click', async () => {
+  await buyerUpdate({ address: $('f_addr').value, shippingMethod: $('f_ship').value || null, paymentMethod: $('f_pay').value || null });
+  const r = await fetch('/demo/buyer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'submit' }) }).then((x) => x.json());
+  if (r.ok) { $('orderMsg').textContent = 'Order placed: ' + r.order.orderId + ' (existing flow, no agent involved)'; log('human placed order ' + r.order.orderId); }
+  else { $('orderMsg').textContent = 'Submit refused: ' + r.error; log('human submit refused: ' + r.error, 'warn'); }
+  await refresh();
+});
+
+/* ---------------- the box: agent console ---------------- */
+const AT = window.AgenTill;
+AT.init({ baseUrl: '' });
+AT.on('snapshot', (s) => log(`snapshot seq=${s.snapshot.seq} tool=${s.snapshot.tool} sig=${s.sig.slice(0, 10)}…`));
+AT.on('receipt', (r) => log(`toll receipt ${r.receipt_id} ${r.tool} $${(r.amountMinor / 100).toFixed(2)}`));
+AT.on('confirmation:required', (c) => log(`buyer confirmation required (${c.level}): ${c.reason}`, 'warn'));
+AT.on('payment:required', () => log('tool call needs x402 payment', 'warn'));
+
+async function agentCall(tool, args) {
+  try {
+    const out = await AT.invoke(tool, args || {});
+    log(`agent ${tool} → ok`);
+    if (out.result && out.result.results) log(`  found ${out.result.results.length} product(s)`);
+    if (out.result && out.result.orderId) log(`  ORDER ${out.result.orderId} submitted after buyer approval`);
+  } catch (e) {
+    log(`agent ${tool} → ${e.code || 'error'}: ${e.message}`, e.code === 'buyer_denied' ? 'warn' : 'err');
+  }
+  await refresh();
+}
+
+$('a_search').addEventListener('click', () => agentCall('browse_catalog', { query: 'shoe' }));
+$('a_get').addEventListener('click', async () => {
+  try {
+    const out = await AT.invoke('read_checkout', {});
+    log(`agent read_checkout → status=${out.result.checkout.status} items=${out.result.checkout.items.length}`);
+  } catch (e) { log('agent read_checkout → ' + e.message, 'err'); }
+});
+$('a_ship').addEventListener('click', () => agentCall('amend_checkout', { patch: { shippingMethod: 'express' } }));
+$('a_complete').addEventListener('click', () => agentCall('seal_order', {}));
+
+(async function boot() {
+  const pf = await fetch('/demo/preflight').then((x) => x.json()).catch(() => null);
+  const badge = $('preflightBadge');
+  if (pf && pf.ok) {
+    badge.textContent = `box: ACTIVE — pre-flight clean (${pf.checks.length} checks)`;
+    log(`pre-flight clean: ${pf.checks.length} checks passed; box activated`);
+  } else {
+    badge.textContent = 'box: REFUSED';
+    badge.classList.add('refused');
+    log('pre-flight refused activation — agent console disabled', 'err');
+    document.querySelectorAll('button.agent').forEach((b) => { b.disabled = true; });
+    return;
+  }
+  const j = await fetch('/demo/credential').then((x) => x.json());
+  AT.setCredential(j.credential);
+  log('agent credential loaded (agent id: ' + (j.credential && j.credential.agentId) + ')');
+  await loadProducts();
+  await refresh();
+})();
+</script>
+</body>
+</html>

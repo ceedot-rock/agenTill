@@ -1,0 +1,233 @@
+{
+  "$id": "https://agentill.local/schemas/merchant-settings.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Required merchant settings for the agentic commerce box. The box REFUSES to activate unless every required section validates AND the dry-run compatibility check passes against the merchant's existing checkout flow.",
+  "properties": {
+    "allowedToolScopes": {
+      "description": "Tool scopes the merchant permits agents to use. Must be a subset of the box's known scopes.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "catalog": {
+      "description": "Where the agent-readable product catalog comes from.",
+      "properties": {
+        "items": {
+          "description": "Inline catalog (type=inline only).",
+          "items": {
+            "$ref": "#/definitions/catalogItem"
+          },
+          "type": "array"
+        },
+        "pointer": {
+          "description": "URL or store-internal pointer (type=url|store).",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "inline",
+            "url",
+            "store"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "checkoutBinding": {
+      "description": "How the box reaches the merchant's EXISTING checkout state object. The box never replaces this flow.",
+      "properties": {
+        "applyPatch": {
+          "description": "How applyPatch is reached: 'adapter' means the merchant's server adapter implements it.",
+          "enum": [
+            "adapter"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "confirmationPolicy": {
+      "description": "Buyer-confirmation gating. seal_order ALWAYS requires buyer confirmation regardless of mode.",
+      "properties": {
+        "amountThresholdMinor": {
+          "description": "Integer minor units; used when mode=threshold.",
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "always",
+            "threshold"
+          ],
+          "type": "string"
+        },
+        "stepUpTools": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "currency": {
+      "description": "ISO 4217 currency code. Must match the merchant's existing checkout currency.",
+      "pattern": "^[A-Z]{3}$",
+      "type": "string"
+    },
+    "merchantId": {
+      "description": "Stable merchant identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "paymentRails": {
+      "description": "At least one rail. x402 rails need a wallet with address+network.",
+      "items": {
+        "properties": {
+          "rail": {
+            "enum": [
+              "x402",
+              "stripe",
+              "manual"
+            ],
+            "type": "string"
+          },
+          "wallet": {
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "network": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "address",
+              "network"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "rail"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "shipping": {
+      "description": "Shipping configuration pointer.",
+      "properties": {
+        "configPointer": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "spendCaps": {
+      "description": "Integer minor units. perOrder <= perDay is enforced; perAgent caps a single agent.",
+      "properties": {
+        "perAgentMinor": {
+          "type": "integer"
+        },
+        "perDayMinor": {
+          "type": "integer"
+        },
+        "perOrderMinor": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "perOrderMinor",
+        "perDayMinor"
+      ],
+      "type": "object"
+    },
+    "tax": {
+      "description": "Tax configuration pointer.",
+      "properties": {
+        "configPointer": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "tolls": {
+      "description": "Optional per-tool toll override. Tolls are OFF unless this is set.",
+      "type": "object"
+    },
+    "identity": {
+      "description": "How the box verifies calling agents. open (default): any agent, self-asserted id. es256-jwt: generic signed-JWT identity; needs publicJwk.",
+      "properties": {
+        "adapter": {
+          "enum": [
+            "open",
+            "es256-jwt"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "toolTrust": {
+      "description": "Minimum trust per tool (open|verified|elevated). Defaults all to open; buyer confirmation guards money.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "allowedToolScopes",
+    "catalog",
+    "checkoutBinding",
+    "confirmationPolicy",
+    "currency",
+    "merchantId",
+    "paymentRails",
+    "shipping",
+    "spendCaps",
+    "tax"
+  ],
+  "title": "AgentillMerchantSettings",
+  "type": "object",
+  "definitions": {
+    "catalogItem": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "priceMinor": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "priceMinor"
+      ],
+      "type": "object"
+    }
+  }
+}
