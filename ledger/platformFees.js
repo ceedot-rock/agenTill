@@ -11,11 +11,16 @@
  * This module only records what accrued and what was marked settled.
  *
  * Two backends:
- *   - createPlatformFeeLedger({ filePath }) — JSON file, atomic write
- *     (tmp + rename), fsync-free but crash-tolerant enough for 0.3.0.
+ *   - createPlatformFeeLedger({ filePath }) — gzip-compressed JSON file,
+ *     atomic write (tmp + rename), fsync-free but crash-tolerant enough
+ *     for 0.3.0. Legacy plain-JSON files (pretty or minified) still load:
+ *     the loader sniffs the gzip magic and falls back to raw JSON.
  *     This is the durable backend: point it at ledger/data/platform-fees.json.
  *   - createMemoryPlatformFeeLedger() — same interface, in-memory.
  *     Used by tests and as the box default when no ledgerFile is configured.
+ *
+ * Compression: node:zlib (stdlib) behind one encode/decode pair, so the
+ * lab's own PCC binary can replace it later without touching callers.
  *
  * File shape:
  *   { version: 1,
@@ -26,9 +31,22 @@
  */
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { wholeCentsDue } from '../core/platformFee.js';
 
 const LEDGER_VERSION = 1;
+
+/* Gzip magic: 0x1f 0x8b. One codec pair — swap for PCC later if wanted. */
+function encodeLedger(data) {
+    return gzipSync(Buffer.from(JSON.stringify(data), 'utf8'));
+}
+
+function decodeLedgerBytes(buf) {
+    if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+        return gunzipSync(buf).toString('utf8');
+    }
+    return buf.toString('utf8'); // legacy plain-JSON files keep loading
+}
 
 function blankFile() {
     return { version: LEDGER_VERSION, merchants: {} };
@@ -133,7 +151,7 @@ export function createPlatformFeeLedger({ filePath }) {
         if (!existsSync(filePath)) return blankFile();
         let data;
         try {
-            data = JSON.parse(readFileSync(filePath, 'utf8'));
+            data = JSON.parse(decodeLedgerBytes(readFileSync(filePath)));
         } catch (e) {
             throw new Error(`platform-fee ledger: corrupt ledger file at ${filePath}: ${e.message}`);
         }
@@ -145,7 +163,7 @@ export function createPlatformFeeLedger({ filePath }) {
     const save = (data) => {
         mkdirSync(dirname(filePath), { recursive: true });
         const tmp = `${filePath}.tmp`;
-        writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+        writeFileSync(tmp, encodeLedger(data));
         renameSync(tmp, filePath); // atomic replace on POSIX
     };
     // fail fast on a bad path at construction time

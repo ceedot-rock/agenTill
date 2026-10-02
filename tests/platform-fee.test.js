@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -378,6 +379,83 @@ describe('platform fee end-to-end (seal_order)', () => {
             await sealOnce(box, 'buyer-a');
             const again = createPlatformFeeLedger({ filePath: ledgerFile });
             assert.equal(again.balanceMicrocents('fee-store'), 7290);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});
+
+/* ---------- compressed ledger storage (roundtrip + fallback) ---------- */
+
+describe('ledger compression', () => {
+    function seed(ledger, merchants = 12, per = 15) {
+        for (let i = 0; i < merchants; i++) {
+            const m = `merchant_${i}_acme_trading_co`;
+            for (let s = 0; s < per; s++) {
+                ledger.accrue({ merchantId: m, orderId: `o${i}-${s}`, seq: s, microcents: 7290 + s, rate: '0.00081', recipient: 'Slid Phi Labs', at: 1759276800 + s });
+            }
+            ledger.settle({ merchantId: m, wholeCents: 1, invoiceRef: `inv-${i}` });
+        }
+    }
+
+    const sha256 = (obj) => createHash('sha256').update(JSON.stringify(obj)).digest('hex');
+
+    it('roundtrips byte-identical through compress/decompress (SHA-256)', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agentill-fee-'));
+        try {
+            const path = join(dir, 'fees.json');
+            const a = createPlatformFeeLedger({ filePath: path });
+            seed(a);
+            const before = sha256(a.snapshot());
+            const b = createPlatformFeeLedger({ filePath: path });
+            assert.equal(sha256(b.snapshot()), before);
+            assert.equal(b.balanceMicrocents('merchant_0_acme_trading_co'), a.balanceMicrocents('merchant_0_acme_trading_co'));
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('stored file is smaller than the JSON it holds', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agentill-fee-'));
+        try {
+            const path = join(dir, 'fees.json');
+            const a = createPlatformFeeLedger({ filePath: path });
+            seed(a, 20, 20);
+            const stored = statSync(path).size;
+            const plain = JSON.stringify(a.snapshot()).length;
+            assert.ok(stored < plain, `stored ${stored} should be < plain ${plain}`);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('legacy plain-JSON files still load (fallback path)', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agentill-fee-'));
+        try {
+            const path = join(dir, 'fees.json');
+            const a = createPlatformFeeLedger({ filePath: path });
+            seed(a, 3, 4);
+            const snap = a.snapshot();
+            // overwrite with legacy pretty-printed plain JSON
+            writeFileSync(path, JSON.stringify(snap, null, 2) + '\n', 'utf8');
+            const b = createPlatformFeeLedger({ filePath: path });
+            assert.equal(sha256(b.snapshot()), sha256(snap));
+            // and the next save upgrades it to compressed transparently
+            b.accrue({ merchantId: 'merchant_0_acme_trading_co', orderId: 'oX', seq: 99, microcents: 10, rate: '0.00081', recipient: 'Slid Phi Labs', at: 1 });
+            const raw = readFileSync(path);
+            assert.equal(raw[0], 0x1f, 'after re-save the file should be gzip');
+            assert.equal(raw[1], 0x8b, 'after re-save the file should be gzip');
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('corrupt gzip still throws loudly (never silently loses money)', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'agentill-fee-'));
+        try {
+            const path = join(dir, 'fees.json');
+            writeFileSync(path, Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad, 0xbe, 0xef]));
+            assert.throws(() => createPlatformFeeLedger({ filePath: path }), /corrupt ledger/);
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }
