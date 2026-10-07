@@ -1,5 +1,9 @@
 # agenTill
 
+[![Audited checks](https://github.com/ceedot-rock/agenTill/actions/workflows/audited-checks.yml/badge.svg)](https://github.com/ceedot-rock/agenTill/actions/workflows/audited-checks.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/agentill.svg)](https://www.npmjs.com/package/agentill)
+
 Turn any online product into a storefront AI agents can buy from — with payment built in.
 
 A merchant drops agenTill onto their existing checkout. Agents get four tools: browse the catalog, read the checkout, update the checkout, and seal the order. The merchant's own checkout flow stays exactly as it is — the box never replaces it. Every order still goes through the merchant's own payment, and nothing submits without the buyer's explicit approval. There is no way for an agent to buy anything on its own.
