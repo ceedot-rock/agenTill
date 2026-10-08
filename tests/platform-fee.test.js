@@ -274,16 +274,20 @@ const adapter = (stateOver = {}) => {
 
 const cred = (agentId = 'agent-1', scopes = KNOWN_SCOPES) => ({ agentId, scopes });
 
-async function sealOnce(box, sessionId) {
-    const need = await box.invokeTool({ tool: 'seal_order', args: {}, credential: cred(), buyerSessionId: sessionId });
+async function sealOnce(box) {
+    // the buyer's browser holds the session cookie; the agent never sees it
+    const buyer = box.issueBuyerSession();
+    const need = await box.invokeTool({ tool: 'seal_order', args: {}, credential: cred() });
     assert.equal(need.body.status, 'confirmation_required');
     const c = need.body.confirmation;
+    const ch = box.issueConfirmationChallenge({
+        tool: 'seal_order', stateHash: c.stateHash, buyerSessionId: buyer.sessionId,
+    });
     return box.invokeTool({
         tool: 'seal_order',
         args: {},
         credential: cred(),
-        buyerSessionId: sessionId,
-        buyerConfirmation: { challenge: c.challenge, exp: c.exp, stateHash: c.stateHash, buyerSessionId: sessionId, approved: true },
+        buyerConfirmation: { challenge: ch.challenge, exp: ch.exp, stateHash: ch.stateHash, buyerSessionId: buyer.sessionId, approved: true },
     });
 }
 
@@ -293,7 +297,7 @@ describe('platform fee end-to-end (seal_order)', () => {
         const pf = await box.preflight();
         assert.equal(pf.ok, true, JSON.stringify(pf.errors));
 
-        const done = await sealOnce(box, 'buyer-a');
+        const done = await sealOnce(box);
         assert.equal(done.status, 200, JSON.stringify(done.body));
         assert.equal(done.body.ok, true);
 
@@ -318,8 +322,8 @@ describe('platform fee end-to-end (seal_order)', () => {
     it('accumulates across orders', async () => {
         const box = createBox({ settings: settings(), adapter: adapter(), secrets: { serverSecret: SECRET } });
         assert.equal((await box.preflight()).ok, true);
-        await sealOnce(box, 'buyer-a');
-        await sealOnce(box, 'buyer-b');
+        await sealOnce(box);
+        await sealOnce(box);
         assert.equal(box.feeLedger.balanceMicrocents('fee-store'), 14580);
     });
 
@@ -330,7 +334,7 @@ describe('platform fee end-to-end (seal_order)', () => {
             secrets: { serverSecret: SECRET },
         });
         assert.equal((await box.preflight()).ok, true);
-        const done = await sealOnce(box, 'buyer-a');
+        const done = await sealOnce(box);
         assert.equal(done.body.platformFee.microcents, 7290); // 0.081% of $9.00
         assert.equal(box.feeLedger.balanceMicrocents('fee-store'), 7290);
     });
@@ -342,7 +346,7 @@ describe('platform fee end-to-end (seal_order)', () => {
             secrets: { serverSecret: SECRET },
         });
         assert.equal((await box.preflight()).ok, true);
-        const done = await sealOnce(box, 'buyer-a');
+        const done = await sealOnce(box);
         assert.equal(done.body.platformFee.microcents, 7290); // still 0.081%
         assert.equal(done.body.platformFee.recipient, '0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c');
     });
@@ -355,7 +359,7 @@ describe('platform fee end-to-end (seal_order)', () => {
         });
         const pf = await box.preflight();
         assert.equal(pf.ok, true);
-        const done = await sealOnce(box, 'buyer-a');
+        const done = await sealOnce(box);
         assert.equal(done.body.platformFee.microcents, 7290);
     });
 
@@ -376,12 +380,65 @@ describe('platform fee end-to-end (seal_order)', () => {
                 secrets: { serverSecret: SECRET },
             });
             assert.equal((await box.preflight()).ok, true);
-            await sealOnce(box, 'buyer-a');
+            await sealOnce(box);
             const again = createPlatformFeeLedger({ filePath: ledgerFile });
             assert.equal(again.balanceMicrocents('fee-store'), 7290);
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }
+    });
+
+    it('fails closed (500) when the fee cannot be computed — never seals with a 0 fee', async () => {
+        // An Infinity-priced item makes merchandiseMinor non-integer, so
+        // computePlatformFeeMicrocents refuses. The box must 500 BEFORE the
+        // merchant flow runs: no submit, no snapshot, no 0-fee line.
+        let submitted = false;
+        const s = {
+            status: 'cart',
+            items: [{ id: 'p9', title: 'Day Pass', qty: 1, priceMinor: Infinity }],
+            currency: 'USD',
+            address: '1 Main St',
+            shippingMethod: 'standard',
+            paymentMethod: 'card_1',
+            buyerConfirmed: false,
+            totals: null,
+        };
+        const evilAdapter = {
+            // no JSON round-trip here: Infinity must survive into the box
+            getState: () => ({ ...s, items: s.items.map((i) => ({ ...i })) }),
+            applyPatch: (p) => {
+                if (p && p.__agentill_probe) return evilAdapter.getState();
+                Object.assign(s, p);
+                return evilAdapter.getState();
+            },
+            getConfig: () => ({ currency: 'USD' }),
+            describeSubmit: () => ({ bindings: 1 }),
+            getCatalog: () => [{ id: 'p9', title: 'Day Pass', priceMinor: 900 }],
+            submitOrder: (st) => {
+                submitted = true;
+                return { ...st, orderId: 'ord_evil', status: 'submitted' };
+            },
+        };
+        const box = createBox({ settings: settings(), adapter: evilAdapter, secrets: { serverSecret: SECRET } });
+        assert.equal((await box.preflight()).ok, true);
+
+        const buyer = box.issueBuyerSession();
+        const need = await box.invokeTool({ tool: 'seal_order', args: {}, credential: cred() });
+        assert.equal(need.body.status, 'confirmation_required');
+        const c = need.body.confirmation;
+        const ch = box.issueConfirmationChallenge({
+            tool: 'seal_order', stateHash: c.stateHash, buyerSessionId: buyer.sessionId,
+        });
+        const done = await box.invokeTool({
+            tool: 'seal_order',
+            args: {},
+            credential: cred(),
+            buyerConfirmation: { challenge: ch.challenge, exp: ch.exp, stateHash: ch.stateHash, buyerSessionId: buyer.sessionId, approved: true },
+        });
+        assert.equal(done.status, 500, JSON.stringify(done.body));
+        assert.equal(done.body.error.code, 'fee_compute');
+        assert.equal(submitted, false, 'merchant submitOrder must not run when the fee computation fails');
+        assert.equal(box.feeLedger.balanceMicrocents('fee-store'), 0, 'nothing may accrue on a refused seal');
     });
 });
 

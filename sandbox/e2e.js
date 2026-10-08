@@ -104,6 +104,21 @@ const pf = await box.preflight();
 check('pre-flight activates clean', pf.ok === true, `${(pf.checks || []).length} dry-run checks passed`);
 if (!pf.ok) { console.log(JSON.stringify(pf.errors, null, 2)); process.exit(1); }
 
+// The buyer's browser holds an HttpOnly session cookie; this script plays the
+// buyer by exchanging its session token for challenges, exactly the way the
+// browser does via POST /agentill/confirm/challenge (cookie-gated).
+const buyerSession = box.issueBuyerSession();
+const buyerHeaders = { cookie: `agentill_buyer=${buyerSession.token}` };
+const buyerChallenge = ({ tool, stateHash }) => {
+    const v = box.buyerSessionFromHeaders(buyerHeaders);
+    if (!v.ok) throw new Error('buyer session lost');
+    return box.issueConfirmationChallenge({ tool, stateHash, buyerSessionId: v.sessionId });
+};
+const buyerApprove = ({ tool, stateHash }) => {
+    const ch = buyerChallenge({ tool, stateHash });
+    return { challenge: ch.challenge, exp: ch.exp, stateHash: ch.stateHash, buyerSessionId: ch.buyerSessionId, approved: true };
+};
+
 // 2. browse_catalog
 const browse = await box.invokeTool({ tool: 'browse_catalog', args: { query: 'day' }, credential });
 check('browse_catalog finds the Day Pass', browse.status === 200 && browse.body.ok && browse.body.result.results.length === 1 && browse.body.result.results[0].id === 'day-pass',
@@ -117,7 +132,7 @@ check('read_checkout returns the shared cart', read.status === 200 && read.body.
 const amend1 = await box.invokeTool({
     tool: 'amend_checkout',
     args: { patch: { items: [{ id: 'day-pass', title: 'PCC Day Pass', qty: 1, priceMinor: 900 }] } },
-    credential, buyerSessionId: 'buyer-sandbox-1',
+    credential,
 });
 check('amend_checkout (items) asks buyer first', amend1.body.status === 'confirmation_required');
 {
@@ -125,8 +140,8 @@ check('amend_checkout (items) asks buyer first', amend1.body.status === 'confirm
     const amend1b = await box.invokeTool({
         tool: 'amend_checkout',
         args: { patch: { items: [{ id: 'day-pass', title: 'PCC Day Pass', qty: 1, priceMinor: 900 }] } },
-        credential, buyerSessionId: 'buyer-sandbox-1',
-        buyerConfirmation: { challenge: c.challenge, exp: c.exp, stateHash: c.stateHash, buyerSessionId: 'buyer-sandbox-1', approved: true },
+        credential,
+        buyerConfirmation: buyerApprove({ tool: 'amend_checkout', stateHash: c.stateHash }),
     });
     check('amend_checkout (items) applies after buyer approval', amend1b.status === 200 && amend1b.body.ok === true);
 }
@@ -134,7 +149,7 @@ check('amend_checkout (items) asks buyer first', amend1.body.status === 'confirm
 const amend2 = await box.invokeTool({
     tool: 'amend_checkout',
     args: { patch: { address: 'buyer@example.com', shippingMethod: 'digital', paymentMethod: 'card_sandbox_visa' } },
-    credential, buyerSessionId: 'buyer-sandbox-1',
+    credential,
 });
 check('amend_checkout (address+shipping+payment) asks buyer first', amend2.body.status === 'confirmation_required');
 {
@@ -142,23 +157,42 @@ check('amend_checkout (address+shipping+payment) asks buyer first', amend2.body.
     const amend2b = await box.invokeTool({
         tool: 'amend_checkout',
         args: { patch: { address: 'buyer@example.com', shippingMethod: 'digital', paymentMethod: 'card_sandbox_visa' } },
-        credential, buyerSessionId: 'buyer-sandbox-1',
-        buyerConfirmation: { challenge: c.challenge, exp: c.exp, stateHash: c.stateHash, buyerSessionId: 'buyer-sandbox-1', approved: true },
+        credential,
+        buyerConfirmation: buyerApprove({ tool: 'amend_checkout', stateHash: c.stateHash }),
     });
     check('amend_checkout (details) applies after buyer approval', amend2b.status === 200 && amend2b.body.ok === true,
         `totalMinor=${amend2b.body.result.totals?.totalMinor}`);
 }
 
 // 5. seal_order WITHOUT buyer confirmation -> refused
-const sealNoConfirm = await box.invokeTool({ tool: 'seal_order', args: {}, credential, buyerSessionId: 'buyer-sandbox-1' });
+const sealNoConfirm = await box.invokeTool({ tool: 'seal_order', args: {}, credential });
 check('REFUSAL: seal_order without buyer confirmation is refused', sealNoConfirm.body.status === 'confirmation_required',
     `got status=${sealNoConfirm.body.status}`);
+
+// 5b. ADVERSARIAL: an agent that mints its own challenge (no buyer session)
+// cannot seal the order, even with approved:true.
+{
+    const c = sealNoConfirm.body.confirmation;
+    const forged = box.issueConfirmationChallenge({
+        tool: 'seal_order', stateHash: c.stateHash, buyerSessionId: 'agent-forged-session',
+    });
+    const attack = await box.invokeTool({
+        tool: 'seal_order', args: {}, credential,
+        buyerConfirmation: {
+            challenge: forged.challenge, exp: forged.exp, stateHash: forged.stateHash,
+            buyerSessionId: 'agent-forged-session', approved: true,
+        },
+    });
+    check('REFUSAL: self-issued challenge without a buyer session cannot seal',
+        attack.status === 403 && attack.body.error.code === 'bad_confirmation',
+        `got status=${attack.status} code=${attack.body.error && attack.body.error.code}`);
+}
 
 // 6. seal_order WITH buyer confirmation -> submits through the merchant flow
 const c = sealNoConfirm.body.confirmation;
 const seal = await box.invokeTool({
-    tool: 'seal_order', args: {}, credential, buyerSessionId: 'buyer-sandbox-1',
-    buyerConfirmation: { challenge: c.challenge, exp: c.exp, stateHash: c.stateHash, buyerSessionId: 'buyer-sandbox-1', approved: true },
+    tool: 'seal_order', args: {}, credential,
+    buyerConfirmation: buyerApprove({ tool: 'seal_order', stateHash: c.stateHash }),
 });
 check('seal_order submits after buyer approval', seal.status === 200 && seal.body.ok === true && seal.body.result.orderId === 'ord_5001',
     `orderId=${seal.body.result.orderId}`);

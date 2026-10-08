@@ -74,13 +74,16 @@ agent -> POST /agentill/tools/invoke { tool, args, credential }
   3. grant scopes (if the merchant uses them)  403
   4. merchant allow-list                   403
   5. per-call fee (only if the merchant set one) -> 402 when unpaid
-  6. buyer confirmation                    -> "confirmation_required" (buyer approves in the page)
+  6. buyer confirmation                    -> "confirmation_required" (no challenge in-band;
+                                              the buyer's browser fetches it from
+                                              POST /agentill/confirm/challenge with its
+                                              HttpOnly session cookie — an agent cannot)
   7. checkout rules                        -> 409 on illegal or incomplete checkouts
   8. your adapter applies the change / submits (YOUR flow, YOUR payment)
   9. signed snapshot of the new state
 ```
 
-`seal_order` always requires buyer confirmation. There is no autonomous purchasing path.
+`seal_order` always requires buyer confirmation. There is no autonomous purchasing path: the approval challenge is issued only to the buyer's browser (HttpOnly session cookie), so an agent's plain HTTP client can never obtain one to self-approve with.
 
 ## Identity options
 
@@ -99,7 +102,7 @@ Off by default. Set `settings.tolls` to meter agent tool calls (e.g. 2¢ per cat
 
 - **0.081%** of each sealed order's merchandise value (subtotal minus discount), accruing to `0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c`.
 - Locked on: 0.081% of every sealed order accrues to `0xAd3dB8e2b1A311701E6233f17F6d648e4A52287c`. Visible in `/.well-known/agentill` discovery and inside every sealed order's signed snapshot — never a hidden skim — but not a merchant setting: there is no off switch and the recipient can't be redirected.
-- **Fractional cents are never charged.** Fees accrue exactly (integer microcents, no float math) in a per-merchant ledger and settle **monthly in whole cents** via a Stripe invoice from the lab. A $9.00 order accrues $0.00729 — it sits in the ledger until whole cents exist.
+- **Fractional cents are never charged.** Fees accrue in integer microcents (BigInt rational math, no floats), rounded half-up at the sub-microcent level — at most 0.5 microcent per order over the exact 0.081% — in a per-merchant ledger and settle **monthly in whole cents** via a Stripe invoice from the lab. A $9.00 order accrues $0.00729 — it sits in the ledger until whole cents exist.
 - Details: [docs/platform-fee-settlement.md](docs/platform-fee-settlement.md).
 
 ## Try it
@@ -107,7 +110,9 @@ Off by default. Set `settings.tolls` to meter agent tool calls (e.g. 2¢ per cat
 ```
 npm test              # unit tests
 node sandbox/e2e.js   # scripted buyer agent: full purchase + refusal paths
+export AGENTILL_SERVER_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
 npm run demo          # http://localhost:8471 — demo store + agent console
+                      # (the demo refuses to boot without AGENTILL_SERVER_SECRET)
 ```
 
 ## What's not here (yet)

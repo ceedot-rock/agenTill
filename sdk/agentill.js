@@ -180,7 +180,22 @@
                 err.code = 'buyer_denied';
                 throw err;
             }
-            out = await send({ challenge: c.challenge, exp: c.exp, stateHash: c.stateHash, buyerSessionId, approved: true });
+            // The signed challenge is fetched from the buyer-authenticated
+            // route: the browser presents the HttpOnly buyer-session cookie
+            // automatically, and the server issues the challenge bound to that
+            // session. The agent is never handed a challenge in-band, so it
+            // cannot self-approve.
+            const chReq = await post(c.challengeEndpoint || '/agentill/confirm/challenge', {
+                tool, stateHash: c.stateHash,
+            });
+            if (chReq.status === 401 || !chReq.data || !chReq.data.challenge) {
+                const err = new Error('buyer session required: the approval challenge is issued only to the buyer\'s browser');
+                err.code = 'buyer_session_required';
+                err.status = chReq.status;
+                throw err;
+            }
+            const ch = chReq.data;
+            out = await send({ challenge: ch.challenge, exp: ch.exp, stateHash: c.stateHash, buyerSessionId: ch.buyerSessionId, approved: true });
             return AT._handleResult(tool, out);
         }
         return AT._handleResult(tool, out);

@@ -91,7 +91,17 @@ const settings = {
 
 /* ---------------- boot ---------------- */
 
-const serverSecret = 'demo-server-secret-change-me';
+// The box's signing secret. ENV-ONLY: the demo refuses to boot without one.
+// Set it before every run/deploy:
+//   export AGENTILL_SERVER_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+const serverSecret = process.env.AGENTILL_SERVER_SECRET;
+if (!serverSecret) {
+    console.error('[box] REFUSING TO BOOT: AGENTILL_SERVER_SECRET is not set.');
+    console.error('[box] Generate a value and export it, e.g.:');
+    console.error('  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    console.error('  export AGENTILL_SERVER_SECRET=<the value>');
+    process.exit(1);
+}
 
 const box = createBox({
     settings,
@@ -146,9 +156,23 @@ function json(res, status, obj) {
     res.end(JSON.stringify(obj));
 }
 
+// Buyer session: when the buyer's browser loads the checkout page, open a
+// buyer session and set its token as an HttpOnly cookie. The box issues
+// confirmation challenges only to callers presenting this cookie, which an
+// agent's plain HTTP client can never present or read.
+function serveCheckoutPage(res) {
+    const sess = box.issueBuyerSession();
+    res.writeHead(200, {
+        'content-type': 'text/html',
+        'Set-Cookie': `agentill_buyer=${sess.token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`,
+    });
+    res.end(readFileSync(FILES['/'].path));
+}
+
 const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://localhost');
     try {
+        if (url.pathname === '/' && req.method === 'GET') return serveCheckoutPage(res);
         if (url.pathname === '/demo/state' && req.method === 'GET') return json(res, 200, { ok: true, state: adapter.getState() });
         if (url.pathname === '/demo/buyer' && req.method === 'POST') {
             let data = '';

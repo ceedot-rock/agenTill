@@ -9,6 +9,8 @@
  *   GET  /.well-known/agentill    discovery document
  *   POST /agentill/preflight      run full pre-flight (validate+semantic+dry-run); returns report
  *   POST /agentill/confirm/challenge  issue a buyer-confirmation challenge
+ *                                    (buyer-session HttpOnly cookie required;
+ *                                    401 without it)
  *   POST /agentill/tools/invoke   the tool pipeline
  *
  * Invoke pipeline (each step refuses loudly, nothing half-executes):
@@ -50,7 +52,7 @@ import {
     feeLineForSnapshot,
 } from '../core/platformFee.js';
 import { createPlatformFeeLedger, createMemoryPlatformFeeLedger } from '../ledger/platformFees.js';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 /** Scopes each tool needs (checked against JWT scopes + merchant allow-list). */
 export const TOOL_SCOPES = {
@@ -124,6 +126,17 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
         || (settings.platformFee && settings.platformFee.ledgerFile
             ? createPlatformFeeLedger({ filePath: settings.platformFee.ledgerFile })
             : createMemoryPlatformFeeLedger());
+    // Buyer sessions: the buyer-held secret the agent never sees. When the
+    // buyer's browser loads the checkout page, the merchant calls
+    // box.issueBuyerSession() and sets the returned token as an HttpOnly
+    // cookie (agentill_buyer). Confirmation challenges are issued ONLY to a
+    // caller presenting that cookie, so an agent's plain HTTP client can
+    // never obtain one. sessionId -> { token, exp }
+    const buyerSessions = new Map();
+    const BUYER_COOKIE = 'agentill_buyer';
+    const purgeExpiredBuyerSessions = (nowSec) => {
+        for (const [id, s] of buyerSessions) if (s.exp <= nowSec) buyerSessions.delete(id);
+    };
     const usage = new Map(); // "<agent>:<tool>:<period>" -> count (merchant persists in prod)
     const seqCounters = new Map(); // merchantId -> seq
     let activation = null;
@@ -193,6 +206,43 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
             const stable = { tool, stateHash, buyerSessionId, exp };
             const expected = createHmac('sha256', secrets.serverSecret).update(canon(stable)).digest('hex');
             return challenge === expected;
+        },
+
+        /**
+         * Open a buyer session for the buyer's browser. The merchant sets the
+         * returned `token` as the HttpOnly `agentill_buyer` cookie when the
+         * checkout page loads. There is no HTTP endpoint that creates
+         * sessions — only the merchant's page-load code can open one, so an
+         * agent can never mint a buyer session for itself.
+         * Returns { sessionId, token, exp }.
+         */
+        issueBuyerSession({ ttlSec = 3600, nowSec = Math.floor(Date.now() / 1000) } = {}) {
+            purgeExpiredBuyerSessions(nowSec);
+            const sessionId = `bsess_${randomBytes(9).toString('hex')}`;
+            const token = randomBytes(32).toString('hex');
+            const exp = nowSec + ttlSec;
+            buyerSessions.set(sessionId, { token, exp });
+            return { sessionId, token, exp };
+        },
+
+        /** Resolve the buyer session from request headers (the HttpOnly cookie). */
+        buyerSessionFromHeaders(headers = {}, nowSec = Math.floor(Date.now() / 1000)) {
+            purgeExpiredBuyerSessions(nowSec);
+            const cookie = String((headers && (headers.cookie || headers.Cookie)) || '');
+            const part = cookie.split(';').map((s) => s.trim()).find((s) => s.startsWith(`${BUYER_COOKIE}=`));
+            if (!part) return { ok: false };
+            const token = part.slice(BUYER_COOKIE.length + 1).trim();
+            for (const [sessionId, s] of buyerSessions) {
+                if (s.token === token && s.exp > nowSec) return { ok: true, sessionId };
+            }
+            return { ok: false };
+        },
+
+        /** True when sessionId names a live (unexpired) buyer session. */
+        buyerSessionActive(sessionId, nowSec = Math.floor(Date.now() / 1000)) {
+            purgeExpiredBuyerSessions(nowSec);
+            const s = buyerSessions.get(sessionId);
+            return !!(s && s.exp > nowSec);
         },
 
         async invokeTool(body, { http = null } = {}) {
@@ -283,10 +333,13 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
             const confCheck = confirmationRequired({ tool, action: args, policy: { confirmation: settings.confirmationPolicy }, state });
             if (confCheck.required && confCheck.level !== 'none') {
                 const bc = buyerConfirmation || {};
-                const sessionId = body.buyerSessionId || (args && args.buyerSessionId) || 'anonymous';
-                if (!bc.approved) {
-                    const stateHash = createHmac('sha256', secrets.serverSecret).update(canon(state)).digest('hex').slice(0, 16);
-                    const ch = this.issueConfirmationChallenge({ tool, stateHash, buyerSessionId: sessionId });
+                const stateHash = createHmac('sha256', secrets.serverSecret).update(canon(state)).digest('hex').slice(0, 16);
+                if (!bc.approved || !bc.challenge) {
+                    // The agent is NEVER handed a usable challenge here: the
+                    // buyer fetches it from POST /agentill/confirm/challenge
+                    // with their HttpOnly session cookie, which an agent's
+                    // plain HTTP client cannot present. A request-body boolean
+                    // alone is never approval.
                     return {
                         status: 200,
                         body: {
@@ -295,14 +348,17 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
                             confirmation: {
                                 level: confCheck.level,
                                 reason: confCheck.reason,
-                                challenge: ch.challenge,
-                                exp: ch.exp,
                                 stateHash,
+                                exp: nowSec + 300,
                                 summary: summarizeAction(tool, args, state),
+                                challengeEndpoint: '/agentill/confirm/challenge',
                             },
                         },
                     };
                 }
+                // Approval requires a BUYER-ISSUED challenge: HMAC-valid AND
+                // bound to a live buyer session. approved:true with a missing
+                // or self-issued challenge is refused.
                 const okCh = this.verifyConfirmationChallenge({
                     challenge: bc.challenge,
                     tool,
@@ -311,6 +367,12 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
                     exp: bc.exp,
                 }, nowSec);
                 if (!okCh) return fail(403, 'bad_confirmation', 'buyer confirmation challenge invalid or expired');
+                if (bc.stateHash !== stateHash) {
+                    return fail(403, 'bad_confirmation', 'checkout state changed after the buyer approved; re-request confirmation');
+                }
+                if (!this.buyerSessionActive(bc.buyerSessionId, nowSec)) {
+                    return fail(403, 'bad_confirmation', 'confirmation is not bound to an active buyer session');
+                }
                 // A verified buyer confirmation satisfies the state machine's
                 // buyerConfirmed requirement for this invocation.
                 if (tool === 'seal_order') {
@@ -329,7 +391,21 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
                 if (!tr.ok) return fail(409, tr.error.code, tr.error.message);
             }
 
-            // 8. execute against the merchant's OWN flow
+            // 8. platform fee pre-computation (FAIL CLOSED): the locked 0.081%
+            // fee is computed on the projected post-transition state BEFORE the
+            // merchant flow runs. If it ever fails, the whole invocation
+            // refuses with 500 here — an order is never sealed with a 0 fee.
+            let feeRes = null;
+            let merchandiseMinor = 0;
+            if (tool === 'seal_order') {
+                const feeTotals = recomputeTotals(tr.state, { taxRateBps: settings.taxRateBps || 0 });
+                if (!feeTotals.ok) return fail(500, 'fee_compute', `platform fee input totals failed: ${feeTotals.error.code}`);
+                merchandiseMinor = Math.max(0, feeTotals.totals.subtotalMinor - feeTotals.totals.discountMinor);
+                feeRes = computePlatformFeeMicrocents(merchandiseMinor, platformFeeCfg);
+                if (!feeRes.ok) return fail(500, 'fee_compute', `platform fee computation failed: ${feeRes.error}`);
+            }
+
+            // 9. execute against the merchant's OWN flow
             let newState;
             try {
                 newState = executeTool(tool, args, adapter, tr.state);
@@ -343,19 +419,18 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
                 return fail(403, 'spend_cap', `order total ${totals.totals.totalMinor} exceeds per-order cap ${settings.spendCaps.perOrderMinor}`);
             }
 
-            // 9. snapshot + receipt
+            // 10. snapshot + receipt
             const seqKey = settings.merchantId;
             const seq = (seqCounters.get(seqKey) || 0) + 1;
             seqCounters.set(seqKey, seq);
 
-            // 9b. platform fee on sealed orders: exact BigInt math, integer
+            // 10b. platform fee on sealed orders: exact BigInt math, integer
             // microcents; fractional cents accrue in the ledger and are NEVER
             // charged. The fee line rides inside the signed snapshot state.
+            // feeRes was computed (fail-closed) before the merchant flow ran.
             let platformFeeLine = null;
-            if (tool === 'seal_order' && totals.ok) {
-                const merchandiseMinor = Math.max(0, totals.totals.subtotalMinor - totals.totals.discountMinor);
-                const feeRes = computePlatformFeeMicrocents(merchandiseMinor, platformFeeCfg);
-                const microcents = feeRes.ok ? feeRes.microcents : 0;
+            if (tool === 'seal_order' && feeRes) {
+                const microcents = feeRes.microcents;
                 if (microcents > 0) {
                     feeLedger.accrue({
                         merchantId: settings.merchantId,
@@ -400,8 +475,41 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
                         return sendJson(res, report.ok ? 200 : 422, report);
                     }
                     if (req.method === 'POST' && path === '/agentill/confirm/challenge') {
+                        // Challenges are issued ONLY to the buyer's browser: the
+                        // caller must present the HttpOnly buyer-session cookie
+                        // set when the checkout page loaded. An agent's plain
+                        // HTTP client cannot present it, so it can never obtain
+                        // a challenge to self-approve with.
+                        const sess = this.buyerSessionFromHeaders(req.headers || {});
+                        if (!sess.ok) {
+                            return sendJson(res, 401, {
+                                ok: false,
+                                error: { code: 'buyer_session_required', message: 'a buyer session cookie is required to issue a confirmation challenge' },
+                            });
+                        }
                         const body = await readBody(req);
-                        const ch = this.issueConfirmationChallenge(body);
+                        if (!body || !body.tool) {
+                            return sendJson(res, 400, {
+                                ok: false,
+                                error: { code: 'bad_request', message: 'challenge request needs { tool, stateHash }' },
+                            });
+                        }
+                        // The challenge binds the CURRENT checkout state: if it
+                        // moved since the agent asked for confirmation, refuse
+                        // so the flow restarts from fresh state.
+                        const stateHash = createHmac('sha256', secrets.serverSecret).update(canon(adapter.getState())).digest('hex').slice(0, 16);
+                        if (body.stateHash && body.stateHash !== stateHash) {
+                            return sendJson(res, 409, {
+                                ok: false,
+                                error: { code: 'state_changed', message: 'checkout state changed since confirmation was requested; re-request confirmation' },
+                            });
+                        }
+                        const ch = this.issueConfirmationChallenge({
+                            tool: body.tool,
+                            stateHash,
+                            buyerSessionId: sess.sessionId,
+                            ttlSec: 300,
+                        });
                         return sendJson(res, 200, ch);
                     }
                     if (req.method === 'POST' && path === '/agentill/tools/invoke') {

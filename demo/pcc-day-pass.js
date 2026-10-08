@@ -96,11 +96,17 @@ const settings = {
 };
 
 const credential = { agentId: 'demo-buyer-agent', scopes: KNOWN_SCOPES };
-const BUYER = 'buyer-demo-1';
-const buyerApprove = (c) => ({
-    challenge: c.challenge, exp: c.exp, stateHash: c.stateHash,
-    buyerSessionId: BUYER, approved: true, // demo stand-in for the human tap
-});
+// The buyer holds an HttpOnly session cookie; this script plays the buyer by
+// exchanging its session token for challenges, exactly the way the browser
+// does via POST /agentill/confirm/challenge (cookie-gated).
+const buyerApprove = (box, { tool, stateHash }) => {
+    const sess = box.__demoBuyerSession || (box.__demoBuyerSession = box.issueBuyerSession());
+    const v = box.buyerSessionFromHeaders({ cookie: `agentill_buyer=${sess.token}` });
+    if (!v.ok) throw new Error('buyer session lost');
+    // demo stand-in for the human tap in the page
+    const ch = box.issueConfirmationChallenge({ tool, stateHash, buyerSessionId: v.sessionId });
+    return { challenge: ch.challenge, exp: ch.exp, stateHash: ch.stateHash, buyerSessionId: ch.buyerSessionId, approved: true };
+};
 
 console.log('== agenTill live demo: PCC Day Pass ($9.00) ==');
 console.log(`mode: ${LIVE ? 'LIVE (charge step still gated)' : 'DRY RUN (no charge)'}\n`);
@@ -117,31 +123,31 @@ const browse = await box.invokeTool({ tool: 'browse_catalog', args: { query: 'da
 console.log('browse_catalog ->', browse.body.result.results.map((r) => `${r.title} $${(r.priceMinor / 100).toFixed(2)}`).join(', '));
 
 const amendItems = await box.invokeTool({
-    tool: 'amend_checkout', args: { patch: { items: [{ ...DAY_PASS, qty: 1 }] } }, credential, buyerSessionId: BUYER,
+    tool: 'amend_checkout', args: { patch: { items: [{ ...DAY_PASS, qty: 1 }] } }, credential,
 });
 const amendItemsOk = await box.invokeTool({
-    tool: 'amend_checkout', args: { patch: { items: [{ ...DAY_PASS, qty: 1 }] } }, credential, buyerSessionId: BUYER,
-    buyerConfirmation: buyerApprove(amendItems.body.confirmation),
+    tool: 'amend_checkout', args: { patch: { items: [{ ...DAY_PASS, qty: 1 }] } }, credential,
+    buyerConfirmation: buyerApprove(box, { tool: 'amend_checkout', stateHash: amendItems.body.confirmation.stateHash }),
 });
 console.log('amend_checkout (items) ->', amendItemsOk.body.ok ? 'buyer approved, cart updated' : 'FAILED');
 
 const amendDetails = await box.invokeTool({
     tool: 'amend_checkout',
     args: { patch: { address: 'corey@slidphilabs.com', shippingMethod: 'digital', paymentMethod: 'stripe_card_on_file' } },
-    credential, buyerSessionId: BUYER,
+    credential,
 });
 const amendDetailsOk = await box.invokeTool({
     tool: 'amend_checkout',
     args: { patch: { address: 'corey@slidphilabs.com', shippingMethod: 'digital', paymentMethod: 'stripe_card_on_file' } },
-    credential, buyerSessionId: BUYER, buyerConfirmation: buyerApprove(amendDetails.body.confirmation),
+    credential, buyerConfirmation: buyerApprove(box, { tool: 'amend_checkout', stateHash: amendDetails.body.confirmation.stateHash }),
 });
 console.log('amend_checkout (details) ->', amendDetailsOk.body.ok ? `buyer approved, total $${(amendDetailsOk.body.result.totals.totalMinor / 100).toFixed(2)}` : 'FAILED');
 
-const sealAsk = await box.invokeTool({ tool: 'seal_order', args: {}, credential, buyerSessionId: BUYER });
+const sealAsk = await box.invokeTool({ tool: 'seal_order', args: {}, credential });
 console.log('seal_order (no confirmation) ->', sealAsk.body.status);
 const seal = await box.invokeTool({
-    tool: 'seal_order', args: {}, credential, buyerSessionId: BUYER,
-    buyerConfirmation: buyerApprove(sealAsk.body.confirmation),
+    tool: 'seal_order', args: {}, credential,
+    buyerConfirmation: buyerApprove(box, { tool: 'seal_order', stateHash: sealAsk.body.confirmation.stateHash }),
 });
 console.log('seal_order (buyer approved) ->', seal.body.ok ? `ORDER ${seal.body.result.orderId}` : `FAILED: ${JSON.stringify(seal.body)}`);
 

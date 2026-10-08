@@ -11,11 +11,11 @@ and in the README pricing section.
 
 ## The one hard rule
 
-**Fractional cents are NEVER charged.** The fee is computed exactly
-(BigInt rational math, no floats) and tracked in integer microcents
-(1e-6 of a currency unit) in a per-merchant ledger. A $9.00 order accrues
-exactly 7290 microcents ($0.00729) — it sits in the ledger; nothing is
-charged.
+**Fractional cents are NEVER charged.** The fee is computed with BigInt
+rational math (no floats), rounded half-up to integer microcents (at most
+0.5 microcent per order over the exact 0.081%), and tracked in the
+per-merchant ledger. A $9.00 order accrues exactly 7290 microcents
+($0.00729) — it sits in the ledger; nothing is charged.
 
 ## Settlement: monthly Stripe invoice (recommended path)
 

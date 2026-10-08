@@ -228,18 +228,26 @@ describe('middleware pipeline', () => {
 
     it('seal_order demands buyer confirmation, then submits through the merchant flow', async () => {
         const { box } = await activeBox({}, { address: '1 Main St', shippingMethod: 'standard', paymentMethod: 'card_1' });
-        const need = await box.invokeTool({ tool: 'seal_order', args: {}, credential: cred(), buyerSessionId: 'buyer-1' });
+        // the buyer's browser holds the session cookie; the agent never sees it
+        const buyer = box.issueBuyerSession();
+        const need = await box.invokeTool({ tool: 'seal_order', args: {}, credential: cred() });
         assert.equal(need.status, 200);
         assert.equal(need.body.status, 'confirmation_required');
         assert.equal(need.body.confirmation.level, 'buyer');
         const c = need.body.confirmation;
+        // the agent is never handed a usable challenge in-band
+        assert.ok(!('challenge' in c), 'confirmation_required must not carry a challenge');
+
+        // the buyer's browser fetches the challenge with its session cookie
+        const ch = box.issueConfirmationChallenge({
+            tool: 'seal_order', stateHash: c.stateHash, buyerSessionId: buyer.sessionId,
+        });
 
         const done = await box.invokeTool({
             tool: 'seal_order',
             args: {},
             credential: cred(),
-            buyerSessionId: 'buyer-1',
-            buyerConfirmation: { challenge: c.challenge, exp: c.exp, stateHash: c.stateHash, buyerSessionId: 'buyer-1', approved: true },
+            buyerConfirmation: { challenge: ch.challenge, exp: ch.exp, stateHash: ch.stateHash, buyerSessionId: buyer.sessionId, approved: true },
         });
         assert.equal(done.status, 200, JSON.stringify(done.body));
         assert.equal(done.body.ok, true);
@@ -271,11 +279,15 @@ describe('middleware pipeline', () => {
     it('spend caps refuse oversized orders', async () => {
         const items = [{ id: 'p1', title: 'Widget', qty: 100, priceMinor: 1000 }]; // $1000 > $500 cap
         const { box } = await activeBox({}, { address: 'a', shippingMethod: 's', paymentMethod: 'p', items });
-        const need = await box.invokeTool({ tool: 'seal_order', args: {}, credential: cred(), buyerSessionId: 'b' });
+        const buyer = box.issueBuyerSession();
+        const need = await box.invokeTool({ tool: 'seal_order', args: {}, credential: cred() });
         const c = need.body.confirmation;
+        const ch = box.issueConfirmationChallenge({
+            tool: 'seal_order', stateHash: c.stateHash, buyerSessionId: buyer.sessionId,
+        });
         const done = await box.invokeTool({
-            tool: 'seal_order', args: {}, credential: cred(), buyerSessionId: 'b',
-            buyerConfirmation: { challenge: c.challenge, exp: c.exp, stateHash: c.stateHash, buyerSessionId: 'b', approved: true },
+            tool: 'seal_order', args: {}, credential: cred(),
+            buyerConfirmation: { challenge: ch.challenge, exp: ch.exp, stateHash: ch.stateHash, buyerSessionId: buyer.sessionId, approved: true },
         });
         assert.equal(done.status, 403);
         assert.equal(done.body.error.code, 'spend_cap');

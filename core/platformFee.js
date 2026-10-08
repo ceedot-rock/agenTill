@@ -15,7 +15,8 @@
  *   - order values are integer minor units (cents) — never floats
  *   - the fee rate is parsed into an EXACT BigInt rational { num, den }
  *   - the fee is tracked in integer microcents (1e-6 of a currency unit),
- *     so fractional cents accrue exactly and are NEVER charged
+ *     rounded half-up from the exact rational value (at most 0.5 microcent
+ *     per order over the exact 0.081%); fractional cents are NEVER charged
  *   - settlement converts accrued microcents to whole cents with floor();
  *     the sub-cent remainder carries forward in the ledger
  *
@@ -148,8 +149,10 @@ export function formatMicrocentsUSD(microcents) {
 
 /**
  * The fee line attached to a sealed order snapshot. Always present for
- * seal_order (microcents 0 when the merchant disabled the fee), so the fee
- * is visible on every sealed order — charged or not.
+ * seal_order — the fee is locked on and can never be disabled, so this line
+ * is never "0 because the merchant turned it off"; microcents is 0 only when
+ * the rounded fee itself is 0 (tiny orders), so the fee stays visible on
+ * every sealed order.
  */
 export function feeLineForSnapshot({ merchandiseMinor, microcents, rate, recipient }) {
     return {

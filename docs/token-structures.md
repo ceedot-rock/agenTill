@@ -111,15 +111,28 @@ merchant can audit them later.
 
 ## Buyer-confirmation challenges
 
-Not a bearer token: a challenge binds one approval to one action.
+A challenge binds one approval to one action — and it is issued only to
+the buyer's browser, never to the agent:
 
 ```
 challenge = HMAC-SHA256(serverSecret,
               canon({ tool, stateHash, buyerSessionId, exp }))
 ```
 
-The server issues it with `confirmation_required`; the buyer approves in
-the SDK modal; the SDK returns `{ challenge, exp, stateHash,
-buyerSessionId, approved: true }`; the server re-verifies before executing.
+1. When the buyer's browser loads the checkout page, the merchant calls
+   `box.issueBuyerSession()` and sets the returned token as the HttpOnly
+   `agentill_buyer` cookie. The agent can never read or present it.
+2. `POST /agentill/tools/invoke` returns `confirmation_required` — with NO
+   challenge in the body. The agent cannot self-approve from this response.
+3. The buyer's browser (cookie presented automatically) POSTs
+   `/agentill/confirm/challenge { tool, stateHash }`; the server binds the
+   challenge to the buyer's live session id and the current checkout state
+   (409 if the state moved since the request; 401 without the cookie).
+4. The SDK retries the tool call with
+   `{ challenge, exp, stateHash, buyerSessionId, approved: true }`; the
+   server re-verifies the HMAC, requires the stateHash to match the current
+   checkout, and requires the buyerSessionId to name a live buyer session.
+   A request-body boolean alone is never approval.
+
 `iat` is deliberately excluded from the signed body so the challenge
 verifies identically at issue and redemption time.
