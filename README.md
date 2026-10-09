@@ -123,3 +123,13 @@ npm run demo          # http://localhost:8471 — demo store + agent console
 ## License
 
 Apache-2.0
+
+## From the same lab
+
+- **AwLPay** — multi-rail agent payments (USDC x402 on Base and Solana, PayPal sandbox bridge): https://github.com/ceedot-rock/awlpay
+- **ExactOdds** — provably-fair game math, byte-identical rules across five languages: https://github.com/ceedot-rock/exactodds
+- **TNSSRC** — local lossless compression engine (Silesia 43,724,575 bytes, 12/12 decode+SHA verified): https://github.com/ceedot-rock/neural-pcc
+- **pulsar** — free local best-path compressor (GPLv3 demo, not PCC): https://github.com/ceedot-rock/pulsar-best
+- **TRUSTREAM** — lossless compression for live data streams in 4 KiB tiles: https://github.com/ceedot-rock/trustream
+- **Chamber** — two-key JSON sealing for secrets: https://github.com/ceedot-rock/json-chamber-sdk
+- Lab site: https://www.slidphilabs.com

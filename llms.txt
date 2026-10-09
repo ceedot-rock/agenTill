@@ -1,0 +1,26 @@
+# agenTill
+
+agenTill is a drop-in payment box that turns any online product into a storefront AI agents can buy from, with payment built in, from Slid Phi Labs. A merchant drops it onto their existing checkout — the box never replaces the merchant's own payment flow — and agents get four tools: browse the catalog, read the shared checkout, amend the checkout (buyer approves anything that moves money), and seal the order (buyer always approves first; no agent can buy on its own).
+
+## Key facts
+
+- Four agent tools over HTTP: `browse_catalog`, `read_checkout`, `amend_checkout`, `seal_order`; agents discover the box at `/.well-known/agentill`.
+- Pre-flight gate: the box validates the merchant's settings and dry-runs against the live checkout before activating; anything off → refusal, never a partial activation.
+- All money-moving actions pause for the buyer's explicit approval. Denying is always safe.
+- Every executed action seals the resulting state into a signed snapshot (tamper-proof, replay-proof).
+- Platform fee (locked on, no off switch, recipient can't be redirected): **0.081%** of each sealed order's merchandise value, accrued in integer microcents and settled monthly in whole cents.
+- Install: `npm install agentill`. Live demo: https://agentill-demo.fly.dev
+- License: Apache-2.0.
+- Contact: corey@slidphilabs.com. Lab: https://www.slidphilabs.com
+
+## Quick start
+
+```html
+<script src="https://your-cdn/agentill.js"></script>
+<script>
+  AgenTill.init({ baseUrl: 'https://shop.example.com' });
+  AgenTill.setCredential({ agentId: 'agent-1', scopes: ['read:catalog'] });
+</script>
+```
+
+Then write the four-function adapter over your existing checkout, declare settings, run `preflight()`, and mount the middleware — see the README's 5-minute drop-in walkthrough.
