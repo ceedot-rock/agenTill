@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: agenTill
+authors:
+  - family-names: Tasz
+    given-names: Corey
+    email: corey@slidphilabs.com
+    affiliation: Slid Phi Labs
+version: 0.3.2
+date-released: 2026-10-09
+repository-code: "https://github.com/ceedot-rock/agenTill"
+url: "https://agentill-demo.fly.dev"
+license: Apache-2.0
+abstract: "Drop-in payment box turning any online product into an agent-buyable storefront: four agent tools over HTTP, pre-flight refusal gate, buyer approval on all money moves, signed snapshots. Platform fee 0.081% per sealed order, locked on."
