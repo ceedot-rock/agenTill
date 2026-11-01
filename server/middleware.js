@@ -159,7 +159,7 @@ export function createBox({ settings, adapter, secrets, hooks = {} }) {
             }
             return {
                 name: 'agentill',
-                version: '0.3.0',
+                version: '0.3.2',
                 tools: {
                     sharedState: true,
                     note: 'tools run against the merchant checkout state object; agent and buyer share one checkout',
